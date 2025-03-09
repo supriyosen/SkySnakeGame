@@ -1,0 +1,2614 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sky Snake Game</title>
+    <link rel="icon" href="favicon.svg" type="image/svg+xml">
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+        }
+        #gameContainer {
+            position: relative;
+            width: 100%;
+            height: 100vh;
+        }
+        #gameUI {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            z-index: 10;
+            background-color: rgba(0, 0, 0, 0.5);
+            padding: 10px;
+            border-radius: 5px;
+        }
+        #startMenu {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            z-index: 20;
+        }
+        button {
+            background-color: #4CAF50;
+            border: none;
+            color: white;
+            padding: 10px 20px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 16px;
+            margin: 10px 2px;
+            cursor: pointer;
+            border-radius: 5px;
+        }
+        input {
+            padding: 10px;
+            margin: 10px 0;
+            width: 100%;
+            box-sizing: border-box;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <div id="gameUI">
+            <div>Score: <span id="score">0</span></div>
+            <div>Players: <span id="playerCount">1</span></div>
+            <div>AI Score: <span id="aiScore">0</span></div>
+            <div><button id="musicToggle" style="margin-top: 5px; padding: 5px; background: rgba(0,0,0,0.5); color: white; border: 1px solid white; cursor: pointer;">Mute Music</button></div>
+            <div id="controlsInfo" style="margin-top: 10px; border-top: 1px solid rgba(255,255,255,0.3); padding-top: 5px;">
+                <div style="font-weight: bold; margin-bottom: 5px;">Controls:</div>
+                <div>↑/W: Pitch Up</div>
+                <div>↓/S: Pitch Down</div>
+                <div>←/A: Turn Left</div>
+                <div>→/D: Turn Right</div>
+                <div>Space: Temporary Boost</div>
+                <div>P: Use Speed Powerup</div>
+            </div>
+        </div>
+        <div id="startMenu">
+            <h2>Sky Snake Game</h2>
+            <input type="text" id="playerName" placeholder="Enter your name">
+            <div>
+                <button id="startButton">Start Game</button>
+            </div>
+            <div style="margin-top: 10px;">
+                <button id="testSoundButton">Test Sound</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Three.js library -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/controls/OrbitControls.js"></script>
+    <!-- PeerJS for multiplayer -->
+    <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
+    
+    <!-- Include our missing functions -->
+    <script src="missing-functions.js"></script>
+
+    <script>
+        // Game variables
+        let scene, camera, renderer;
+        let playerSnake;
+        let otherPlayers = {};
+        let food = [];
+        let score = 0;
+        let gameRunning = false;
+        let peer;
+        let connections = [];
+        let playerName = '';
+        let playerId = '';
+        let speedPowerups = [];
+        let speedPowerupCount = 0;
+        let speedPowerupActive = false;
+        let speedPowerupTimer = null;
+        let ambientMusic = null; // Variable to store ambient music
+        let isMusicPlaying = true; // Track if music is playing
+        let clouds = []; // Array to store all clouds for collision detection
+        let processControlsFunction = null; // Function to process continuous key presses
+        
+        // AI Snake variables
+        let aiSnake;
+        let aiUpdateTimer = 0;
+        let aiDecisionInterval = 500; // Make AI decisions every 500ms
+        
+        // Sound effects
+        let eatingSound;
+        let eatingAudioElement; // New HTML5 Audio element for fallback
+        
+        // Game constants
+        const WORLD_SIZE = 500;
+        const SEGMENT_SIZE = 2;
+        const MOVE_SPEED = 0.8; // Increased from 0.4 to 0.8
+        const TURN_SPEED = 0.15; // Increased from 0.1 to 0.15 for more responsive turning
+        const FOOD_COUNT = 50;
+        const POWERUP_SPAWN_CHANCE = 0.1; // 10% chance to spawn a powerup when food is eaten
+        const SPEED_POWERUP_DURATION = 30000; // 30 seconds
+        const TERRAIN_SIZE = WORLD_SIZE * 8; // Much larger terrain
+        const COLORS = [
+            0xff0000, 0x00ff00, 0x0000ff, 0xffff00, 
+            0xff00ff, 0x00ffff, 0xffa500, 0x800080
+        ];
+        
+        // Initialize the game
+        function init() {
+            // Set up the scene
+            setupScene();
+            
+            // Set up the camera
+            setupCamera();
+            
+            // Set up the renderer
+            setupRenderer();
+            
+            // Load sound effects (after camera is initialized)
+            loadSounds();
+            
+            // Set up event listeners
+            window.addEventListener('resize', onWindowResize, false);
+            
+            // Set up music toggle button
+            document.getElementById('musicToggle').addEventListener('click', toggleMusic);
+            
+            // Set up controls and get the processControls function
+            processControlsFunction = setupControls();
+            
+            // Start the animation loop
+            animate();
+            
+            // Show the start menu
+            document.getElementById('startMenu').style.display = 'block';
+            
+            // Add event listener for the start button
+            document.getElementById('startButton').addEventListener('click', startGame);
+            
+            // Add event listener for the test sound button
+            document.getElementById('testSoundButton').addEventListener('click', testSound);
+        }
+        
+        // Set up the scene
+        function setupScene() {
+            // Create a new scene
+            scene = new THREE.Scene();
+            
+            // Add fog to create depth and atmosphere
+            scene.fog = new THREE.FogExp2(0xAADDFF, 0.002);
+            
+            // Set up lighting
+            setupLighting();
+            
+            // Create the game world
+            createWorld();
+            
+            // Load sound effects - MOVED to init function after camera setup
+        }
+        
+        // Set up the camera
+        function setupCamera() {
+            // Create a perspective camera
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            
+            // Position the camera
+            camera.position.set(0, 20, 20);
+            camera.lookAt(0, 0, 0);
+        }
+        
+        // Set up the renderer
+        function setupRenderer() {
+            // Create a WebGL renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setClearColor(0xAADDFF); // Brighter sky blue background
+            renderer.shadowMap.enabled = true;
+            document.getElementById('gameContainer').appendChild(renderer.domElement);
+        }
+        
+        // Set up lighting
+        function setupLighting() {
+            // Add ambient light - increase intensity from 0.5 to 0.7
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+            scene.add(ambientLight);
+            
+            // Add directional light (sun) - increase intensity from 0.8 to 1.2
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 1.2);
+            directionalLight.position.set(50, 200, 100);
+            directionalLight.castShadow = true;
+            directionalLight.shadow.mapSize.width = 2048;
+            directionalLight.shadow.mapSize.height = 2048;
+            directionalLight.shadow.camera.left = -100;
+            directionalLight.shadow.camera.right = 100;
+            directionalLight.shadow.camera.top = 100;
+            directionalLight.shadow.camera.bottom = -100;
+            scene.add(directionalLight);
+        }
+        
+        // Test sound function
+        function testSound() {
+            console.log("Testing sound...");
+            
+            // Try to create and play a simple test sound
+            try {
+                // First try to play our loaded sound
+                if (eatingSound && eatingSound.isReady) {
+                    if (eatingSound.isPlaying) {
+                        eatingSound.stop();
+                    }
+                    eatingSound.play();
+                    showNotification("Playing eating sound!", "#ffff00");
+                    console.log("Test sound played using loaded sound");
+                    return;
+                }
+                
+                // Try the preloaded HTML5 Audio element
+                if (eatingAudioElement) {
+                    // Initialize audio context to help with autoplay restrictions
+                    const tempContext = new (window.AudioContext || window.webkitAudioContext)();
+                    tempContext.resume().then(() => {
+                        console.log("Audio context started for test");
+                    });
+                    
+                    // Reset the audio to the beginning if it's already playing
+                    eatingAudioElement.currentTime = 0;
+                    
+                    // Play the sound with user interaction handling
+                    eatingAudioElement.play()
+                        .then(() => {
+                            console.log("Test sound played using HTML5 Audio");
+                            showNotification("Playing eating sound!", "#ffff00");
+                        })
+                        .catch(error => {
+                            console.error("Could not play test sound:", error);
+                            showNotification("Sound playback failed. Please check your browser settings.", "#ff0000");
+                        });
+                    return;
+                }
+                
+                // If all else fails, create a new audio element
+                const testAudio = new Audio('eating-sound.wav');
+                testAudio.play()
+                    .then(() => {
+                        console.log("Test sound played using new Audio element");
+                        showNotification("Playing eating sound!", "#ffff00");
+                    })
+                    .catch(error => {
+                        console.error("Could not play test sound with new Audio:", error);
+                        showNotification("Sound playback failed. Please check your browser settings.", "#ff0000");
+                    });
+            } catch (error) {
+                console.error("Error in test sound function:", error);
+                showNotification("Sound test failed. Please check your browser settings.", "#ff0000");
+            }
+        }
+        
+        // Toggle ambient music function
+        function toggleMusic() {
+            if (!ambientMusic) return;
+            
+            if (isMusicPlaying) {
+                // Mute the music
+                ambientMusic.volume = 0;
+                document.getElementById('musicToggle').textContent = 'Unmute Music';
+                isMusicPlaying = false;
+                showNotification("Music muted", "#ffffff");
+            } else {
+                // Unmute the music
+                ambientMusic.volume = 0.25; // Reduced from 0.5 to 0.25 (50% reduction)
+                document.getElementById('musicToggle').textContent = 'Mute Music';
+                isMusicPlaying = true;
+                
+                // If music is not playing, try to start it
+                if (ambientMusic.paused) {
+                    ambientMusic.play()
+                        .then(() => console.log("Resumed ambient music"))
+                        .catch(e => console.error("Failed to resume ambient music:", e));
+                }
+                
+                showNotification("Music playing", "#ffffff");
+            }
+        }
+        
+        // Load sound effects
+        function loadSounds() {
+            try {
+                // First, make sure camera is defined before using it
+                if (!camera) {
+                    console.error("Camera is not initialized yet");
+                    return;
+                }
+                
+                // Create an audio listener
+                const listener = new THREE.AudioListener();
+                camera.add(listener); // Attach the listener to the camera
+                
+                // Create a global audio source for eating sound
+                eatingSound = new THREE.Audio(listener);
+                
+                // Load the eating sound file
+                const audioLoader = new THREE.AudioLoader();
+                
+                // Add a console log to confirm loading attempt
+                console.log("Attempting to load eating sound...");
+                
+                // Also preload an HTML5 Audio element as fallback for eating sound
+                eatingAudioElement = new Audio('eating-sound.wav');
+                eatingAudioElement.volume = 1.0;
+                eatingAudioElement.preload = 'auto';
+                
+                // Add event listeners to track loading status
+                eatingAudioElement.addEventListener('canplaythrough', () => {
+                    console.log("HTML5 Audio element loaded successfully");
+                });
+                
+                eatingAudioElement.addEventListener('error', (e) => {
+                    console.error("HTML5 Audio element loading error:", e);
+                });
+                
+                // Create ambient music using HTML5 Audio
+                // This is simpler and more reliable than Three.js audio for background music
+                ambientMusic = new Audio('Elysium.mp3');
+                ambientMusic.loop = true;
+                ambientMusic.volume = 0.25; // Reduced from 0.5 to 0.25 (50% reduction)
+                console.log("Ambient music element created");
+                
+                // We won't play it yet - we'll wait for user interaction
+                
+                // Load eating sound with Three.js
+                audioLoader.load(
+                    'eating-sound.wav', 
+                    function(buffer) {
+                        // Success callback
+                        eatingSound.setBuffer(buffer);
+                        eatingSound.setVolume(1.0); // Increased volume to maximum
+                        eatingSound.isReady = true;
+                        console.log("Eating sound loaded successfully");
+                    },
+                    function(xhr) {
+                        // Progress callback
+                        console.log((xhr.loaded / xhr.total * 100) + '% loaded');
+                    },
+                    function(error) {
+                        // Error callback
+                        console.error("Error loading eating sound:", error);
+                    }
+                );
+            } catch (error) {
+                console.error("Error in loadSounds function:", error);
+            }
+        }
+        
+        // Create the game world
+        function createWorld() {
+            // Create a terrain with hills instead of a flat ground plane
+            createTerrain();
+            
+            // Add distant mountains for horizon effect
+            createMountains();
+            
+            // Add scattered trees
+            createTrees();
+            
+            // Add many more clouds across a larger area with varied scales
+            createClouds();
+            
+            // Add a skybox with atmospheric depth
+            createSkybox();
+        }
+        
+        // Create terrain with hills and valleys
+        function createTerrain() {
+            // Create a larger terrain with hills
+            const resolution = 256; // Resolution of the terrain
+            const terrainGeometry = new THREE.PlaneGeometry(
+                TERRAIN_SIZE, 
+                TERRAIN_SIZE, 
+                resolution - 1, 
+                resolution - 1
+            );
+            
+            // Generate height map for the terrain
+            const vertices = terrainGeometry.attributes.position.array;
+            for (let i = 0; i < vertices.length; i += 3) {
+                // Skip the edges to keep them flat for better world wrapping
+                const x = vertices[i];
+                const z = vertices[i + 2];
+                
+                // Distance from center normalized to 0-1
+                const distFromCenter = Math.sqrt(x * x + z * z) / (TERRAIN_SIZE * 0.5);
+                
+                // Generate hills using multiple layers of simplex noise
+                // Simplified version using sine waves for demo
+                const scale1 = 0.01;
+                const scale2 = 0.05;
+                const scale3 = 0.002;
+                
+                let height = 0;
+                
+                // Only add hills within the playable area and fade them out toward the edges
+                if (distFromCenter < 0.8) {
+                    // Large gentle hills
+                    height += Math.sin(x * scale1) * Math.cos(z * scale1) * 15;
+                    
+                    // Medium details
+                    height += Math.sin(x * scale2 + 0.5) * Math.sin(z * scale2) * 5;
+                    
+                    // Small details
+                    height += Math.sin(x * scale3 * z * scale3) * 2;
+                    
+                    // Fade out hills toward the edge of the playable area
+                    const fadeStart = 0.6;
+                    if (distFromCenter > fadeStart) {
+                        const fade = 1 - ((distFromCenter - fadeStart) / (0.8 - fadeStart));
+                        height *= fade;
+                    }
+                }
+                
+                // Set the height (y-coordinate)
+                vertices[i + 1] = height - 10; // Base at -10
+            }
+            
+            // Update the geometry
+            terrainGeometry.attributes.position.needsUpdate = true;
+            terrainGeometry.computeVertexNormals();
+            
+            // Create terrain material with texture - more vibrant green
+            const terrainMaterial = new THREE.MeshStandardMaterial({ 
+                color: 0x4CAF50, // More vibrant green
+                roughness: 0.8,
+                metalness: 0.1,
+                flatShading: false
+            });
+            
+            // Create the terrain mesh
+            const terrain = new THREE.Mesh(terrainGeometry, terrainMaterial);
+            terrain.rotation.x = -Math.PI / 2;
+            terrain.receiveShadow = true;
+            scene.add(terrain);
+            
+            // Add patches of different green shades for more natural look
+            addGrassPatches();
+        }
+        
+        // Add patches of different green shades
+        function addGrassPatches() {
+            const patchCount = 100;
+            const patchGroup = new THREE.Group();
+            
+            // Different shades of green
+            const greenShades = [
+                0x66BB6A, // Light green
+                0x388E3C, // Dark green
+                0x81C784, // Medium green
+                0x2E7D32  // Forest green
+            ];
+            
+            for (let i = 0; i < patchCount; i++) {
+                // Random position within the world boundaries
+                const x = (Math.random() - 0.5) * WORLD_SIZE * 3;
+                const z = (Math.random() - 0.5) * WORLD_SIZE * 3;
+                
+                // Random size for the patch
+                const size = 20 + Math.random() * 80;
+                
+                // Random green shade
+                const colorIndex = Math.floor(Math.random() * greenShades.length);
+                const color = greenShades[colorIndex];
+                
+                // Create a simple disc for the grass patch
+                const patchGeometry = new THREE.CircleGeometry(size, 8);
+                const patchMaterial = new THREE.MeshStandardMaterial({
+                    color: color,
+                    roughness: 0.9,
+                    metalness: 0.0,
+                    transparent: true,
+                    opacity: 0.7,
+                    side: THREE.DoubleSide,
+                    depthWrite: false, // Prevent z-fighting
+                    polygonOffset: true,
+                    polygonOffsetFactor: -1,
+                    polygonOffsetUnits: -1
+                });
+                
+                const patch = new THREE.Mesh(patchGeometry, patchMaterial);
+                patch.rotation.x = -Math.PI / 2;
+                patch.position.set(x, -9.5, z); // Slightly above the terrain
+                
+                patchGroup.add(patch);
+            }
+            
+            scene.add(patchGroup);
+        }
+        
+        // Create scattered trees
+        function createTrees() {
+            const treeCount = 300; // Number of trees to create
+            const treeGroup = new THREE.Group();
+            
+            // Create different tree types
+            const treeTypes = [
+                createPineTree,
+                createBroadleafTree
+            ];
+            
+            for (let i = 0; i < treeCount; i++) {
+                // Random position within the world boundaries, but not too close to center
+                const minDist = WORLD_SIZE * 0.2; // Minimum distance from center
+                const maxDist = WORLD_SIZE * 1.5; // Maximum distance from center
+                
+                // Generate random angle and distance
+                const angle = Math.random() * Math.PI * 2;
+                const distance = minDist + Math.random() * (maxDist - minDist);
+                
+                // Convert to Cartesian coordinates
+                const x = Math.cos(angle) * distance;
+                const z = Math.sin(angle) * distance;
+                
+                // Random tree type
+                const treeTypeIndex = Math.floor(Math.random() * treeTypes.length);
+                const treeCreator = treeTypes[treeTypeIndex];
+                
+                // Create tree and add to group
+                const tree = treeCreator();
+                
+                // Random scale for variety
+                const scale = 0.8 + Math.random() * 1.2;
+                tree.scale.set(scale, scale, scale);
+                
+                // Position tree
+                tree.position.set(x, -10, z);
+                
+                // Random rotation
+                tree.rotation.y = Math.random() * Math.PI * 2;
+                
+                treeGroup.add(tree);
+            }
+            
+            scene.add(treeGroup);
+        }
+        
+        // Create a pine tree
+        function createPineTree() {
+            const tree = new THREE.Group();
+            
+            // Tree trunk
+            const trunkGeometry = new THREE.CylinderGeometry(0.5, 0.8, 8, 8);
+            const trunkMaterial = new THREE.MeshStandardMaterial({
+                color: 0x8B4513, // Brown
+                roughness: 0.9,
+                metalness: 0.1
+            });
+            const trunk = new THREE.Mesh(trunkGeometry, trunkMaterial);
+            trunk.position.y = 4;
+            tree.add(trunk);
+            
+            // Tree foliage (multiple cones stacked)
+            const foliageMaterial = new THREE.MeshStandardMaterial({
+                color: 0x2E8B57, // Dark green
+                roughness: 0.8,
+                metalness: 0.1
+            });
+            
+            // Bottom layer (largest)
+            const foliage1 = new THREE.Mesh(
+                new THREE.ConeGeometry(4, 6, 8),
+                foliageMaterial
+            );
+            foliage1.position.y = 6;
+            tree.add(foliage1);
+            
+            // Middle layer
+            const foliage2 = new THREE.Mesh(
+                new THREE.ConeGeometry(3, 5, 8),
+                foliageMaterial
+            );
+            foliage2.position.y = 10;
+            tree.add(foliage2);
+            
+            // Top layer (smallest)
+            const foliage3 = new THREE.Mesh(
+                new THREE.ConeGeometry(2, 4, 8),
+                foliageMaterial
+            );
+            foliage3.position.y = 13.5;
+            tree.add(foliage3);
+            
+            return tree;
+        }
+        
+        // Create a broadleaf tree
+        function createBroadleafTree() {
+            const tree = new THREE.Group();
+            
+            // Tree trunk
+            const trunkGeometry = new THREE.CylinderGeometry(0.6, 1, 7, 8);
+            const trunkMaterial = new THREE.MeshStandardMaterial({
+                color: 0x8B4513, // Brown
+                roughness: 0.9,
+                metalness: 0.1
+            });
+            const trunk = new THREE.Mesh(trunkGeometry, trunkMaterial);
+            trunk.position.y = 3.5;
+            tree.add(trunk);
+            
+            // Tree foliage (sphere for the canopy)
+            const foliageMaterial = new THREE.MeshStandardMaterial({
+                color: 0x66BB6A, // Lighter green for broadleaf trees
+                roughness: 0.8,
+                metalness: 0.1
+            });
+            
+            const foliage = new THREE.Mesh(
+                new THREE.SphereGeometry(4, 8, 8),
+                foliageMaterial
+            );
+            foliage.position.y = 9;
+            tree.add(foliage);
+            
+            return tree;
+        }
+        
+        // Create clouds with varied scales
+        function createClouds() {
+            // Create many more clouds across a larger area with varied scales
+            for (let i = 0; i < 200; i++) {
+                // Random position in a much larger volume
+                const x = (Math.random() - 0.5) * TERRAIN_SIZE * 0.8;
+                const y = Math.random() * 150 + 30; // Higher altitude range
+                const z = (Math.random() - 0.5) * TERRAIN_SIZE * 0.8;
+                
+                // Random scale for each cloud
+                const cloudScale = 0.5 + Math.random() * 3.5; // Much more variation
+                
+                createCloud(x, y, z, cloudScale);
+            }
+        }
+        
+        // Create a cloud with specified scale
+        function createCloud(x, y, z, scale = 1) {
+            const cloudGroup = new THREE.Group();
+            const cloudMaterial = new THREE.MeshStandardMaterial({ 
+                color: 0xffffff,
+                roughness: 0.7,
+                metalness: 0.1,
+                transparent: true,
+                opacity: 0.9
+            });
+            
+            // Create several spheres to form a cloud
+            const sphereCount = Math.floor(Math.random() * 5) + 3;
+            for (let i = 0; i < sphereCount; i++) {
+                const radius = (Math.random() * 3 + 2) * scale;
+                const cloudGeometry = new THREE.SphereGeometry(radius, 16, 16);
+                const cloudPiece = new THREE.Mesh(cloudGeometry, cloudMaterial);
+                
+                cloudPiece.position.set(
+                    (Math.random() * 6 - 3) * scale,
+                    (Math.random() * 2) * scale,
+                    (Math.random() * 6 - 3) * scale
+                );
+                
+                cloudGroup.add(cloudPiece);
+            }
+            
+            // Add some vertical variation to cloud shapes
+            if (Math.random() > 0.5) {
+                const topPuff = new THREE.Mesh(
+                    new THREE.SphereGeometry((Math.random() * 2 + 1.5) * scale, 16, 16),
+                    cloudMaterial
+                );
+                topPuff.position.set(0, 2 * scale, 0);
+                cloudGroup.add(topPuff);
+            }
+            
+            cloudGroup.position.set(x, y, z);
+            scene.add(cloudGroup);
+            
+            // Add cloud to the clouds array with a collision radius
+            clouds.push({
+                group: cloudGroup,
+                position: new THREE.Vector3(x, y, z),
+                collisionRadius: 8 * scale // Collision radius based on cloud scale
+            });
+            
+            return cloudGroup;
+        }
+        
+        // Create distant mountains
+        function createMountains() {
+            const mountainGroup = new THREE.Group();
+            
+            // Create a ring of mountains around the play area
+            const mountainCount = 36; // More mountains
+            const radius = TERRAIN_SIZE * 0.45; // Positioned relative to terrain size
+            const mountainHeight = 300; // Taller mountains
+            
+            for (let i = 0; i < mountainCount; i++) {
+                const angle = (i / mountainCount) * Math.PI * 2;
+                const x = Math.cos(angle) * radius;
+                const z = Math.sin(angle) * radius;
+                
+                // Create a simple cone for each mountain
+                const mountainGeometry = new THREE.ConeGeometry(
+                    100 + Math.random() * 150,
+                    mountainHeight + Math.random() * 200,
+                    5 + Math.floor(Math.random() * 3)
+                );
+                
+                // Vary the mountain colors
+                const colorVariation = Math.random() * 0.2 - 0.1;
+                const mountainMaterial = new THREE.MeshStandardMaterial({
+                    color: new THREE.Color(0.5 + colorVariation, 0.5 + colorVariation, 0.5 + colorVariation),
+                    roughness: 0.9,
+                    metalness: 0.1
+                });
+                
+                const mountain = new THREE.Mesh(mountainGeometry, mountainMaterial);
+                mountain.position.set(x, -10 + mountainHeight / 2, z);
+                mountain.rotation.y = Math.random() * Math.PI;
+                
+                mountainGroup.add(mountain);
+            }
+            
+            scene.add(mountainGroup);
+        }
+        
+        // Create a skybox with atmospheric depth
+        function createSkybox() {
+            const skyboxSize = 4000; // Larger skybox
+            const skyboxGeometry = new THREE.BoxGeometry(skyboxSize, skyboxSize, skyboxSize);
+            
+            // Create materials with different shades of blue for atmospheric depth
+            const skyboxMaterials = [
+                new THREE.MeshBasicMaterial({ 
+                    color: 0x66AAFF, // Brighter blue
+                    side: THREE.BackSide,
+                    fog: true 
+                }), // Right
+                new THREE.MeshBasicMaterial({ 
+                    color: 0x66AAFF, // Brighter blue
+                    side: THREE.BackSide,
+                    fog: true 
+                }), // Left
+                new THREE.MeshBasicMaterial({ 
+                    color: 0x3377FF, // Brighter top
+                    side: THREE.BackSide,
+                    fog: true 
+                }), // Top (darker)
+                new THREE.MeshBasicMaterial({ 
+                    color: 0xAADDFF, // Brighter bottom
+                    side: THREE.BackSide,
+                    fog: true 
+                }), // Bottom (lighter)
+                new THREE.MeshBasicMaterial({ 
+                    color: 0x66AAFF, // Brighter blue
+                    side: THREE.BackSide,
+                    fog: true 
+                }), // Front
+                new THREE.MeshBasicMaterial({ 
+                    color: 0x66AAFF, // Brighter blue
+                    side: THREE.BackSide,
+                    fog: true 
+                })  // Back
+            ];
+            
+            const skybox = new THREE.Mesh(skyboxGeometry, skyboxMaterials);
+            scene.add(skybox);
+            
+            // Add fog for atmospheric depth
+            scene.fog = new THREE.FogExp2(0xAADDFF, 0.002);
+        }
+        
+        // Handle window resize
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+        
+        // Animation loop
+        let lastTime = 0;
+        function animate(timestamp) {
+            requestAnimationFrame(animate);
+            
+            // Calculate delta time for smooth animation regardless of frame rate
+            if (!lastTime) lastTime = timestamp;
+            const deltaTime = Math.min((timestamp - lastTime) / 16.67, 2); // Cap at 2x to prevent huge jumps
+            lastTime = timestamp;
+            
+            if (gameRunning && playerSnake) {
+                updateGame(deltaTime);
+            }
+            
+            renderer.render(scene, camera);
+        }
+        
+        // Start the game
+        function startGame() {
+            playerName = document.getElementById('playerName').value || 'Player';
+            playerId = generateId();
+            
+            // Hide the start menu
+            document.getElementById('startMenu').style.display = 'none';
+            
+            // Try to play ambient music directly on user interaction
+            if (ambientMusic && isMusicPlaying) {
+                ambientMusic.play()
+                    .then(() => console.log("Started ambient music on game start"))
+                    .catch(e => console.error("Failed to play ambient music on game start:", e));
+            }
+            
+            // Initialize audio context with user interaction
+            initAudio();
+            
+            // Remove any existing name labels
+            if (playerSnake && playerSnake.nameLabel) {
+                scene.remove(playerSnake.nameLabel);
+                playerSnake.nameLabel = null;
+            }
+            
+            if (aiSnake && aiSnake.nameLabel) {
+                scene.remove(aiSnake.nameLabel);
+                aiSnake.nameLabel = null;
+            }
+            
+            // Remove other players' name labels
+            for (const id in otherPlayers) {
+                if (otherPlayers[id].nameLabel) {
+                    scene.remove(otherPlayers[id].nameLabel);
+                    otherPlayers[id].nameLabel = null;
+                }
+            }
+            
+            // Initialize the player's snake
+            createPlayerSnake();
+            
+            // Create the AI snake
+            createAISnake();
+            
+            // Clear any existing food
+            for (let i = food.length - 1; i >= 0; i--) {
+                scene.remove(food[i].group);
+            }
+            food = [];
+            
+            // Spawn food with varied elevations
+            for (let i = 0; i < FOOD_COUNT; i++) {
+                spawnFood();
+            }
+            
+            // Spawn a few initial powerups
+            for (let i = 0; i < 3; i++) {
+                spawnSpeedPowerup();
+            }
+            
+            // Set up controls
+            setupControls();
+            
+            // Initialize multiplayer
+            initMultiplayer();
+            
+            gameRunning = true;
+        }
+        
+        // Initialize audio with user interaction
+        function initAudio() {
+            try {
+                // Create a temporary audio context to unlock audio on iOS/Safari
+                const tempContext = new (window.AudioContext || window.webkitAudioContext)();
+                tempContext.resume().then(() => {
+                    console.log("Audio context started successfully");
+                    
+                    // Start playing ambient music if it's loaded
+                    if (ambientMusic && isMusicPlaying) {
+                        ambientMusic.play()
+                            .then(() => console.log("Started ambient music after audio context initialization"))
+                            .catch(e => console.error("Failed to play ambient music:", e));
+                    }
+                });
+                
+                // Try to play the preloaded audio element (will likely be silent but unlocks audio)
+                if (eatingAudioElement) {
+                    // Set volume to 0 to make it silent
+                    const originalVolume = eatingAudioElement.volume;
+                    eatingAudioElement.volume = 0;
+                    
+                    // Play and immediately pause to unlock audio
+                    eatingAudioElement.play()
+                        .then(() => {
+                            setTimeout(() => {
+                                eatingAudioElement.pause();
+                                eatingAudioElement.currentTime = 0;
+                                eatingAudioElement.volume = originalVolume;
+                                console.log("Audio unlocked successfully");
+                                
+                                // Now that audio is unlocked, start playing ambient music
+                                if (ambientMusic && isMusicPlaying) {
+                                    ambientMusic.play()
+                                        .then(() => console.log("Ambient music started playing"))
+                                        .catch(e => console.error("Failed to play ambient music:", e));
+                                }
+                            }, 10);
+                        })
+                        .catch(error => {
+                            console.error("Could not unlock audio:", error);
+                            // Restore volume even if play failed
+                            eatingAudioElement.volume = originalVolume;
+                        });
+                }
+            } catch (error) {
+                console.error("Error initializing audio:", error);
+            }
+        }
+        
+        // Separate function for the fallback beep
+        function playFallbackBeep() {
+            try {
+                // Use Web Audio API as last resort
+                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const oscillator = audioContext.createOscillator();
+                const gainNode = audioContext.createGain();
+                
+                oscillator.type = 'sine';
+                oscillator.frequency.setValueAtTime(440, audioContext.currentTime); // A4 note
+                oscillator.connect(gainNode);
+                gainNode.connect(audioContext.destination);
+                
+                gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.3);
+                
+                oscillator.start();
+                oscillator.stop(audioContext.currentTime + 0.3);
+                
+                console.log("Fallback beep played");
+            } catch (beepError) {
+                console.error("Error playing fallback beep:", beepError);
+            }
+        }
+        
+        // Create an eating animation when the snake eats food
+        function createEatingAnimation(headMesh, foodItem) {
+            // Store original scale
+            const originalScale = headMesh.scale.clone();
+            const originalColor = headMesh.material.color.clone();
+            
+            // Create a copy of the food's color
+            const foodColor = new THREE.Color(0xffff00);
+            
+            // Animation duration in milliseconds
+            const duration = 300;
+            const startTime = Date.now();
+            
+            // Create bubble burst effect at the head position instead of food position
+            // This ensures the animation is visible to the player
+            createBubbleBurst(headMesh.position.clone(), foodColor);
+            
+            // Create animation function
+            function animateEating() {
+                const elapsed = Date.now() - startTime;
+                const progress = Math.min(elapsed / duration, 1);
+                
+                if (progress < 1) {
+                    // Pulse scale effect
+                    const scaleFactor = 1 + 0.2 * Math.sin(progress * Math.PI * 2);
+                    headMesh.scale.set(
+                        originalScale.x * scaleFactor,
+                        originalScale.y * scaleFactor,
+                        originalScale.z * scaleFactor
+                    );
+                    
+                    // Flash color effect (blend between original and food color)
+                    if (progress < 0.5) {
+                        const blendFactor = progress * 2; // 0 to 1 during first half
+                        headMesh.material.color.lerpColors(originalColor, foodColor, blendFactor);
+                        } else {
+                        const blendFactor = (1 - progress) * 2; // 1 to 0 during second half
+                        headMesh.material.color.lerpColors(originalColor, foodColor, blendFactor);
+                    }
+                    
+                    // Continue animation
+                    requestAnimationFrame(animateEating);
+                } else {
+                    // Reset to original state
+                    headMesh.scale.copy(originalScale);
+                    headMesh.material.color.copy(originalColor);
+                }
+            }
+            
+            // Start animation
+            animateEating();
+        }
+        
+        // Create bubble burst effect
+        function createBubbleBurst(position, color) {
+            // Create a group to hold all bubbles
+            const bubbleGroup = new THREE.Group();
+            scene.add(bubbleGroup);
+            
+            // Number of bubbles
+            const bubbleCount = 10;
+            
+            // Create bubbles
+            for (let i = 0; i < bubbleCount; i++) {
+                // Create a small sphere for each bubble
+                const bubbleGeometry = new THREE.SphereGeometry(SEGMENT_SIZE * 0.5, 8, 8);
+                const bubbleMaterial = new THREE.MeshBasicMaterial({
+                    color: color,
+                    transparent: true,
+                    opacity: 0.7
+                });
+                
+                const bubble = new THREE.Mesh(bubbleGeometry, bubbleMaterial);
+                
+                // Random position around the center
+                const angle = Math.random() * Math.PI * 2;
+                const radius = Math.random() * SEGMENT_SIZE * 3;
+                bubble.position.set(
+                    position.x + Math.cos(angle) * radius,
+                    position.y + Math.random() * SEGMENT_SIZE * 3,
+                    position.z + Math.sin(angle) * radius
+                );
+                
+                // Add to group
+                bubbleGroup.add(bubble);
+                
+                // Store initial position for animation
+                bubble.userData.initialPosition = bubble.position.clone();
+                bubble.userData.velocity = new THREE.Vector3(
+                    (Math.random() - 0.5) * 0.2,
+                    Math.random() * 0.2 + 0.1,
+                    (Math.random() - 0.5) * 0.2
+                );
+            }
+            
+            // Animation start time
+            const startTime = Date.now();
+            const duration = 1000; // 1 second
+            
+            // Animate bubbles
+            function animateBubbles() {
+                const elapsed = Date.now() - startTime;
+                const progress = elapsed / duration;
+                
+                if (progress < 1) {
+                    // Update each bubble
+                    for (let i = 0; i < bubbleGroup.children.length; i++) {
+                        const bubble = bubbleGroup.children[i];
+                        
+                        // Move bubble based on velocity
+                        bubble.position.add(bubble.userData.velocity);
+                        
+                        // Scale down as animation progresses
+                        const scale = 1 - progress * 0.5;
+                        bubble.scale.set(scale, scale, scale);
+                        
+                        // Fade out in the last 40% of the animation
+                        if (progress > 0.6) {
+                            const opacityFactor = (1 - progress) / 0.4; // 1 to 0 in the last 40% of animation
+                            bubble.material.opacity = 0.7 * opacityFactor;
+                        }
+                    }
+                    
+                    requestAnimationFrame(animateBubbles);
+                } else {
+                    // Remove bubbles when animation is complete
+                    scene.remove(bubbleGroup);
+                }
+            }
+            
+            // Start animation
+            animateBubbles();
+        }
+        
+        // Create sparkling particles effect
+        function createSparkles(position, color) {
+            const particleCount = 15;
+            const particles = [];
+            
+            // Create particle group
+            const particleGroup = new THREE.Group();
+            scene.add(particleGroup);
+            
+            // Create particles
+            for (let i = 0; i < particleCount; i++) {
+                // Create a small, bright particle
+                const geometry = new THREE.BoxGeometry(0.2, 0.2, 0.2);
+                const material = new THREE.MeshBasicMaterial({
+                    color: color,
+                    transparent: true,
+                    opacity: 1
+                });
+                
+                const particle = new THREE.Mesh(geometry, material);
+                
+                // Random initial position around the snake's head
+                const offset = new THREE.Vector3(
+                    (Math.random() - 0.5) * 4,
+                    (Math.random() - 0.5) * 4,
+                    (Math.random() - 0.5) * 4
+                );
+                
+                particle.position.copy(position).add(offset);
+                
+                // Random velocity for the particle
+                const velocity = new THREE.Vector3(
+                    (Math.random() - 0.5) * 0.2,
+                    Math.random() * 0.2 + 0.05,  // Mostly upward
+                    (Math.random() - 0.5) * 0.2
+                );
+                
+                // Add to group and track
+                particleGroup.add(particle);
+                particles.push({
+                    mesh: particle,
+                    velocity: velocity,
+                    life: 1.0  // Life from 1.0 to 0.0
+                });
+            }
+            
+            // Animation duration
+            const duration = 600;
+            const startTime = Date.now();
+            
+            // Animate particles
+            function animateParticles() {
+                const elapsed = Date.now() - startTime;
+                const progress = Math.min(elapsed / duration, 1);
+                
+                if (progress < 1) {
+                    // Update each particle
+                    for (let i = 0; i < particles.length; i++) {
+                        const particle = particles[i];
+                        
+                        // Update position based on velocity
+                        particle.mesh.position.add(particle.velocity);
+                        
+                        // Decrease life
+                        particle.life = 1.0 - progress;
+                        
+                        // Update opacity and scale based on life
+                        particle.mesh.material.opacity = particle.life;
+                        const scale = particle.life * 0.8 + 0.2;
+                        particle.mesh.scale.set(scale, scale, scale);
+                        
+                        // Add some rotation for sparkle effect
+                        particle.mesh.rotation.x += 0.1;
+                        particle.mesh.rotation.y += 0.1;
+                    }
+                    
+                    requestAnimationFrame(animateParticles);
+                } else {
+                    // Remove particles when animation is complete
+                    scene.remove(particleGroup);
+                }
+            }
+            
+            // Start animation
+            animateParticles();
+        }
+        
+        // Show a temporary notification
+        function showNotification(message, color = "#ffffff") {
+            const notification = document.createElement('div');
+            notification.style.position = 'absolute';
+            notification.style.top = '20%';
+            notification.style.left = '50%';
+            notification.style.transform = 'translate(-50%, -50%)';
+            notification.style.color = color;
+            notification.style.fontSize = '20px';
+            notification.style.fontWeight = 'bold';
+            notification.style.textShadow = `0 0 10px ${color}`;
+            notification.style.padding = '10px';
+            notification.style.borderRadius = '5px';
+            notification.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
+            notification.style.zIndex = '100';
+            notification.textContent = message;
+            
+            document.getElementById('gameContainer').appendChild(notification);
+            
+            // Remove after 3 seconds
+            setTimeout(() => {
+                document.getElementById('gameContainer').removeChild(notification);
+            }, 3000);
+        }
+        
+        // Check for collisions with powerups
+        function checkPowerupCollisions() {
+            if (!playerSnake || playerSnake.segments.length === 0) return;
+            
+            const head = playerSnake.segments[0];
+            const headPosition = head.position.clone();
+            
+            for (let i = 0; i < speedPowerups.length; i++) {
+                const powerup = speedPowerups[i];
+                const distance = headPosition.distanceTo(powerup.group.position);
+                
+                if (distance < powerup.collisionRadius) {
+                    // Remove the powerup
+                    scene.remove(powerup.group);
+                    speedPowerups.splice(i, 1);
+                    
+                    // Increase the score
+                    playerSnake.score += 10;
+                    
+                    // Spawn new powerup
+                    spawnSpeedPowerup();
+                    
+                    // Broadcast powerup consumption to other players
+                    if (connections.length > 0) {
+                        broadcastPowerupEaten(i);
+                    }
+                }
+            }
+        }
+        
+        // Check for collisions with other snakes
+        function checkSnakeCollisions() {
+            if (!playerSnake || playerSnake.segments.length === 0) return;
+            
+            const head = playerSnake.segments[0];
+            const headPosition = head.position.clone();
+            
+            // Check collision with own body (starting from the 3rd segment)
+            for (let i = 3; i < playerSnake.segments.length; i++) {
+                const segment = playerSnake.segments[i];
+                const distance = headPosition.distanceTo(segment.position);
+                
+                if (distance < SEGMENT_SIZE * 1.5) {
+                    // Game over
+                    gameOver();
+                    return;
+                }
+            }
+            
+            // Check collision with AI snake
+            if (aiSnake && aiSnake.segments.length > 0) {
+                for (let i = 0; i < aiSnake.segments.length; i++) {
+                    const segment = aiSnake.segments[i];
+                    const distance = headPosition.distanceTo(segment.position);
+                    
+                    if (distance < SEGMENT_SIZE * 1.5) {
+                        // Game over
+                        gameOver("You collided with the AI snake!");
+                        return;
+                    }
+                }
+            }
+            
+            // Check collision with other snakes
+            for (const id in otherPlayers) {
+                const otherSnake = otherPlayers[id];
+                
+                for (let i = 0; i < otherSnake.segments.length; i++) {
+                    const segment = otherSnake.segments[i];
+                    const distance = headPosition.distanceTo(segment.position);
+                    
+                    if (distance < SEGMENT_SIZE * 1.5) {
+                        // Game over
+                        gameOver();
+                        return;
+                    }
+                }
+            }
+            
+            // Check collision with clouds
+            checkCloudCollisions();
+        }
+        
+        // Check for collisions with clouds
+        function checkCloudCollisions() {
+            if (!playerSnake || playerSnake.segments.length === 0) return;
+            
+            const head = playerSnake.segments[0];
+            const headPosition = head.position.clone();
+            
+            // Check collision with each cloud
+            for (let i = 0; i < clouds.length; i++) {
+                const cloud = clouds[i];
+                const distance = headPosition.distanceTo(cloud.group.position);
+                
+                if (distance < cloud.collisionRadius) {
+                    // Game over - snake hit a cloud
+                    gameOver("You crashed into a cloud!");
+                    return;
+                }
+            }
+        }
+        
+        // Animate food items
+        function animateFood() {
+            const time = Date.now() * 0.001;
+            
+            // Animate all food items with varying intensity based on height
+            for (let i = 0; i < food.length; i++) {
+                const foodItem = food[i];
+                
+                // Scale floating animation based on height - higher food floats more
+                const height = foodItem.group.position.y;
+                const floatScale = 0.005 + (height / 100) * 0.01; // Increased floating animation
+                
+                // Floating animation
+                foodItem.group.position.y += Math.sin(time + i) * floatScale;
+                
+                // Rotate the food item for visual interest
+                foodItem.group.rotation.y += 0.015;
+                
+                // Add wobble for all food items, more pronounced for higher ones
+                const wobbleScale = 0.002 + (height / 100) * 0.003;
+                foodItem.group.rotation.x += Math.sin(time * 0.7) * wobbleScale;
+                foodItem.group.rotation.z += Math.cos(time * 0.5) * wobbleScale;
+                
+                // Pulse the glow effect
+                if (foodItem.glowingSphere) {
+                    const pulseScale = 1 + Math.sin(time * 2 + i) * 0.2;
+                    foodItem.glowingSphere.scale.set(pulseScale, pulseScale, pulseScale);
+                }
+                
+                // Pulse the light intensity for more vibrant effect
+                if (foodItem.light) {
+                    foodItem.light.intensity = 1.5 + Math.sin(time * 3 + i) * 0.5;
+                }
+            }
+            
+            // AI food targeting logic
+            if (!aiSnake || aiSnake.segments.length === 0) return;
+            
+            const headPosition = aiSnake.segments[0].position.clone();
+            let closestFood = null;
+            let closestDistance = Infinity;
+            
+            // Find the closest food
+            for (let i = 0; i < food.length; i++) {
+                const foodItem = food[i];
+                const distance = headPosition.distanceTo(foodItem.group.position);
+                
+                if (distance < closestDistance) {
+                    closestDistance = distance;
+                    closestFood = foodItem;
+                }
+            }
+            
+            // If there's no food, just keep moving
+            if (!closestFood) return;
+            
+            // Set the target food
+            aiSnake.targetFood = closestFood;
+            
+            // Calculate direction to the food
+            const toFood = new THREE.Vector3().subVectors(
+                closestFood.group.position,
+                headPosition
+            ).normalize();
+            
+            // Reduce randomness to make movement more predictable and effective
+            const randomFactor = 0.05; // Reduced from 0.2
+            toFood.x += (Math.random() - 0.5) * randomFactor;
+            toFood.z += (Math.random() - 0.5) * randomFactor;
+            toFood.normalize();
+            
+            // More aggressively adjust the direction to target food
+            const turnSpeed = 0.3; // Increased from 0.2
+            aiSnake.direction.lerp(toFood, turnSpeed);
+            aiSnake.direction.normalize();
+            
+            // Update the rotation to match the direction
+            const targetRotationY = Math.atan2(aiSnake.direction.x, aiSnake.direction.z);
+            
+            // Smoothly rotate towards the target rotation
+            const rotationDiff = targetRotationY - aiSnake.rotationY;
+            
+            // Handle the case where the rotation crosses the -PI/PI boundary
+            if (rotationDiff > Math.PI) {
+                aiSnake.rotationY += (rotationDiff - 2 * Math.PI) * turnSpeed;
+            } else if (rotationDiff < -Math.PI) {
+                aiSnake.rotationY += (rotationDiff + 2 * Math.PI) * turnSpeed;
+            } else {
+                aiSnake.rotationY += rotationDiff * turnSpeed;
+            }
+            
+            // More aggressively adjust height to match food height
+            const heightDiff = closestFood.group.position.y - headPosition.y;
+            aiSnake.direction.y = Math.max(-0.5, Math.min(0.5, heightDiff * 0.15)); // Increased from 0.1
+            
+            // Avoid obstacles (like terrain edges)
+            avoidObstacles(aiSnake);
+            
+            // Debug: Log distance to target food if very close
+            if (closestDistance < 15) {
+                console.log(`AI snake distance to food: ${closestDistance.toFixed(2)}`);
+            }
+        }
+        
+        // Animate powerups
+        function animatePowerups() {
+            // Animate each powerup
+            for (let i = 0; i < speedPowerups.length; i++) {
+                const powerup = speedPowerups[i];
+                
+                // Skip if the powerup is not active
+                if (!powerup.active) continue;
+                
+                // Make powerups float up and down slightly
+                powerup.group.position.y += Math.sin(Date.now() * 0.003 + i) * 0.05;
+                
+                // Make powerups rotate
+                powerup.group.rotation.y += 0.02;
+                
+                // Make powerups pulse (scale up and down)
+                const pulseFactor = 1 + Math.sin(Date.now() * 0.005 + i * 0.5) * 0.1;
+                powerup.group.scale.set(pulseFactor, pulseFactor, pulseFactor);
+                
+                // Add a glowing effect by changing the emissive intensity
+                if (powerup.material && powerup.material.emissive) {
+                    const glowIntensity = 0.5 + Math.sin(Date.now() * 0.004 + i) * 0.3;
+                    powerup.material.emissiveIntensity = glowIntensity;
+                }
+            }
+        }
+        
+        // Help the AI avoid obstacles
+        function avoidObstacles(snake) {
+            const head = snake.segments[0];
+            const headPosition = head.position.clone();
+            
+            // Check if we're near the world boundaries - increase the safety margin
+            const boundarySize = WORLD_SIZE / 2 - SEGMENT_SIZE * 15; // Stay further away from the edge (increased from 5 to 15)
+            const distanceToEdgeX = Math.min(
+                Math.abs(headPosition.x - boundarySize),
+                Math.abs(headPosition.x + boundarySize)
+            );
+            const distanceToEdgeZ = Math.min(
+                Math.abs(headPosition.z - boundarySize),
+                Math.abs(headPosition.z + boundarySize)
+            );
+            
+            // If we're near a boundary, steer away from it - increased detection distance
+            if (distanceToEdgeX < 50 || distanceToEdgeZ < 50) { // Increased from 30 to 50
+                // Steer towards the center
+                const toCenter = new THREE.Vector3().subVectors(
+                    new THREE.Vector3(0, headPosition.y, 0),
+                    headPosition
+                ).normalize();
+                
+                // Blend the current direction with the direction to center - more aggressive correction
+                const correctionStrength = Math.min(1.0, 60 / Math.min(distanceToEdgeX, distanceToEdgeZ)); // Stronger correction when closer to edge
+                snake.direction.lerp(toCenter, 0.3 + correctionStrength * 0.4); // More aggressive correction (0.3 to 0.7 based on distance)
+                snake.direction.normalize();
+            }
+            
+            // Avoid going too low or too high
+            if (headPosition.y < 5) {
+                snake.direction.y = Math.max(snake.direction.y, 0.2);
+            } else if (headPosition.y > WORLD_SIZE * 0.6) {
+                snake.direction.y = Math.min(snake.direction.y, -0.2);
+            }
+            
+            // Avoid clouds - check for nearby clouds and steer away from them
+            const cloudAvoidanceDistance = 30; // Distance at which to start avoiding clouds
+            for (let i = 0; i < clouds.length; i++) {
+                const cloud = clouds[i];
+                const cloudPosition = cloud.group.position;
+                const distance = headPosition.distanceTo(cloudPosition);
+                
+                // If we're getting close to a cloud, steer away from it
+                if (distance < cloudAvoidanceDistance + cloud.collisionRadius) {
+                    // Direction away from the cloud
+                    const awayFromCloud = new THREE.Vector3().subVectors(
+                        headPosition,
+                        cloudPosition
+                    ).normalize();
+                    
+                    // Stronger correction when closer to the cloud
+                    const cloudCorrectionStrength = Math.min(1.0, 1.0 - (distance / (cloudAvoidanceDistance + cloud.collisionRadius)));
+                    snake.direction.lerp(awayFromCloud, 0.3 + cloudCorrectionStrength * 0.6);
+                    snake.direction.normalize();
+                    
+                    // If very close to a cloud, make a more drastic evasive maneuver
+                    if (distance < cloud.collisionRadius * 1.5) {
+                        // Add a vertical component to the evasion (go up or down)
+                        if (headPosition.y < cloudPosition.y) {
+                            // Cloud is above, go down
+                            snake.direction.y -= 0.3;
+                        } else {
+                            // Cloud is below, go up
+                            snake.direction.y += 0.3;
+                        }
+                        snake.direction.normalize();
+                    }
+                }
+            }
+        }
+        
+        // Check for collisions between the AI snake and food
+        function checkAIFoodCollisions() {
+            if (!aiSnake || aiSnake.segments.length === 0) return false;
+            
+            const head = aiSnake.segments[0];
+            const headPosition = head.position.clone();
+            
+            // Check collision with regular food
+            for (let i = 0; i < food.length; i++) {
+                const foodItem = food[i];
+                const distance = headPosition.distanceTo(foodItem.group.position);
+                
+                // Increase collision radius for AI snake to make it easier to eat food
+                const aiCollisionRadius = foodItem.collisionRadius * 1.2; // 20% larger collision radius for AI
+                
+                if (distance < aiCollisionRadius) {
+                    // Play eating sound for AI too
+                    playEatingSound();
+                    
+                    // Create eating animation
+                    createEatingAnimation(head.mesh, foodItem);
+                    
+                    // Remove the food
+                scene.remove(foodItem.group);
+                    food.splice(i, 1);
+                    
+                    // Add a new segment to the snake
+                    addSegment(aiSnake);
+                    
+                    // Create new food
+                    spawnFood();
+                    
+                    // Update AI score
+                    aiSnake.score++;
+                    updateScoreDisplay();
+                    
+                    // Show notification for significant events
+                    if (aiSnake.score % 5 === 0) {
+                        showNotification(`Computer: ${aiSnake.score} points!`, "#ffcc00");
+                    }
+                    
+                    return true;
+                }
+            }
+            
+            // Check collision with speed powerups
+            for (let i = 0; i < speedPowerups.length; i++) {
+                const powerup = speedPowerups[i];
+                const distance = headPosition.distanceTo(powerup.group.position);
+                
+                // Increase collision radius for AI snake to make it easier to collect powerups
+                const aiCollisionRadius = powerup.collisionRadius * 1.2; // 20% larger collision radius for AI
+                
+                if (distance < aiCollisionRadius) {
+                    // Create eating animation
+                    createEatingAnimation(head.mesh, powerup);
+                    
+                    // Remove the powerup
+                    scene.remove(powerup.group);
+                    speedPowerups.splice(i, 1);
+                    
+                    // Boost AI speed temporarily
+                    const originalSpeed = aiSnake.speed;
+                    aiSnake.speed = originalSpeed * 1.5;
+                    
+                    // Add visual effect to the snake
+                    for (let j = 0; j < aiSnake.segments.length; j++) {
+                        const segment = aiSnake.segments[j].mesh;
+                        segment.material.emissive = new THREE.Color(0x00ffff);
+                        segment.material.emissiveIntensity = 0.5;
+                    }
+                    
+                    // Reset after duration
+                    setTimeout(() => {
+                        aiSnake.speed = originalSpeed;
+                        
+                        // Reset visual effects
+                        for (let j = 0; j < aiSnake.segments.length; j++) {
+                            const segment = aiSnake.segments[j].mesh;
+                            segment.material.emissive = new THREE.Color(0x000000);
+                            segment.material.emissiveIntensity = 0;
+                        }
+                    }, SPEED_POWERUP_DURATION / 2); // AI uses powerups for half the time
+                    
+                    return true;
+                }
+            }
+            
+            return false;
+        }
+        
+        // Check for AI snake collisions
+        function checkAISnakeCollisions() {
+            if (!aiSnake || aiSnake.segments.length === 0) return;
+            
+            const head = aiSnake.segments[0];
+            const headPosition = head.position.clone();
+            
+            // Check collision with own body (starting from the 3rd segment)
+            for (let i = 3; i < aiSnake.segments.length; i++) {
+                const segment = aiSnake.segments[i];
+                const distance = headPosition.distanceTo(segment.position);
+                
+                if (distance < SEGMENT_SIZE * 1.5) {
+                    // AI snake collided with itself - respawn it
+                    respawnAISnake("collided with itself");
+                    return;
+                }
+            }
+            
+            // Check collision with player snake
+            if (playerSnake && playerSnake.segments.length > 0) {
+                for (let i = 0; i < playerSnake.segments.length; i++) {
+                    const segment = playerSnake.segments[i];
+                    const distance = headPosition.distanceTo(segment.position);
+                    
+                    if (distance < SEGMENT_SIZE * 1.5) {
+                        // AI snake collided with player - respawn it
+                        respawnAISnake("collided with you");
+                        return;
+                    }
+                }
+            }
+            
+            // Check collision with other snakes
+            for (const id in otherPlayers) {
+                const otherSnake = otherPlayers[id];
+                
+                for (let i = 0; i < otherSnake.segments.length; i++) {
+                    const segment = otherSnake.segments[i];
+                    const distance = headPosition.distanceTo(segment.position);
+                    
+                    if (distance < SEGMENT_SIZE * 1.5) {
+                        // AI snake collided with another player - respawn it
+                        respawnAISnake("collided with another player");
+                        return;
+                    }
+                }
+            }
+            
+            // Check collision with clouds
+            for (let i = 0; i < clouds.length; i++) {
+                const cloud = clouds[i];
+                const distance = headPosition.distanceTo(cloud.group.position);
+                
+                if (distance < cloud.collisionRadius) {
+                    // AI snake collided with a cloud - respawn it
+                    respawnAISnake("crashed into a cloud");
+                    return;
+                }
+            }
+            
+            // Check collision with world boundaries - only respawn if severely out of bounds
+            // This prevents frequent respawns for minor boundary crossings
+            const currentTime = Date.now();
+            if (!aiSnake.lastBoundaryCheck) {
+                aiSnake.lastBoundaryCheck = currentTime;
+                aiSnake.boundaryViolations = 0;
+            }
+            
+            // Only check boundaries every 2 seconds to reduce notifications
+            if (currentTime - aiSnake.lastBoundaryCheck > 2000) {
+                aiSnake.lastBoundaryCheck = currentTime;
+                
+                // Check if severely out of bounds
+                if (Math.abs(headPosition.x) > WORLD_SIZE * 0.6 || 
+                    headPosition.y < -10 || headPosition.y > WORLD_SIZE * 0.7 ||
+                    Math.abs(headPosition.z) > WORLD_SIZE * 0.6) {
+                    
+                    // Increment boundary violations counter
+                    aiSnake.boundaryViolations++;
+                    
+                    // Only respawn after multiple violations
+                    if (aiSnake.boundaryViolations >= 2) {
+                        respawnAISnake("hit the boundary");
+                        aiSnake.boundaryViolations = 0;
+                        return;
+                    } else {
+                        // Try to correct course without respawning
+                        const toCenter = new THREE.Vector3().subVectors(
+                            new THREE.Vector3(0, 20, 0),
+                            headPosition
+                        ).normalize();
+                        
+                        // Force direction toward center
+                        aiSnake.direction.copy(toCenter);
+                        aiSnake.direction.normalize();
+                    }
+                } else {
+                    // Reset violations counter if not out of bounds
+                    aiSnake.boundaryViolations = 0;
+                }
+            }
+        }
+        
+        // Respawn the AI snake
+        function respawnAISnake(reason = "crashed") {
+            // Check if enough time has passed since last respawn to avoid spam
+            const currentTime = Date.now();
+            if (!aiSnake.lastRespawnTime) {
+                aiSnake.lastRespawnTime = 0;
+            }
+            
+            // Only show notification if it's been at least 5 seconds since last respawn
+            const showNotificationFlag = (currentTime - aiSnake.lastRespawnTime > 5000);
+            aiSnake.lastRespawnTime = currentTime;
+            
+            // Remove the current AI snake
+            if (aiSnake) {
+                aiSnake.segments.forEach(segment => {
+                    scene.remove(segment.mesh);
+                });
+                if (aiSnake.nameLabel) {
+                    scene.remove(aiSnake.nameLabel);
+                }
+            }
+            
+            // Create a notification (only if enough time has passed)
+            if (showNotificationFlag) {
+                showNotification(`${aiSnake.name} ${reason} and respawned!`, aiSnake.color);
+            }
+            
+            // Save the AI's score
+            const aiScore = aiSnake ? aiSnake.score : 0;
+            
+            // Create a new AI snake
+            createAISnake();
+            
+            // Restore the score with a penalty
+            aiSnake.score = Math.max(0, aiScore - 50); // Penalty for crashing
+            
+            // Preserve the respawn time tracking
+            aiSnake.lastRespawnTime = currentTime;
+            
+            // Update the score display
+            updateScoreDisplay();
+        }
+        
+        // Create the player's snake
+        function createPlayerSnake() {
+            // Choose a random color for the player's snake
+            const colorIndex = Math.floor(Math.random() * COLORS.length);
+            const playerColor = COLORS[colorIndex];
+            
+            // Create the player's snake at the center of the world
+            const startPosition = new THREE.Vector3(0, 20, 0); // Start at a higher elevation
+            
+            // Create the player snake object
+            playerSnake = {
+                id: playerId,
+                name: playerName,
+                segments: [],
+                direction: new THREE.Vector3(1, 0, 0), // Start moving in the positive X direction
+                rotationY: 0,
+                color: playerColor,
+                length: 5,
+                speed: MOVE_SPEED,
+                score: 0
+            };
+            
+            // Create the snake's head
+            const headGeometry = new THREE.BoxGeometry(SEGMENT_SIZE * 2.4, SEGMENT_SIZE * 2, SEGMENT_SIZE * 2);
+            const headMaterial = new THREE.MeshStandardMaterial({ 
+                color: playerColor,
+                roughness: 0.5,
+                metalness: 0.5
+            });
+            const head = new THREE.Mesh(headGeometry, headMaterial);
+                
+                // Add eyes to the head
+                    const eyeGeometry = new THREE.BoxGeometry(SEGMENT_SIZE * 0.4, SEGMENT_SIZE * 0.4, SEGMENT_SIZE * 0.4);
+                    const eyeMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff });
+                    const pupilMaterial = new THREE.MeshBasicMaterial({ color: 0x000000 });
+                    
+                    const leftEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
+                    leftEye.position.set(SEGMENT_SIZE * 1.1, SEGMENT_SIZE * 0.5, -SEGMENT_SIZE * 0.5);
+            head.add(leftEye);
+                    
+                    const rightEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
+                    rightEye.position.set(SEGMENT_SIZE * 1.1, SEGMENT_SIZE * 0.5, SEGMENT_SIZE * 0.5);
+            head.add(rightEye);
+                    
+                    const leftPupil = new THREE.Mesh(
+                        new THREE.BoxGeometry(SEGMENT_SIZE * 0.2, SEGMENT_SIZE * 0.2, SEGMENT_SIZE * 0.2),
+                        pupilMaterial
+                    );
+                    leftPupil.position.set(SEGMENT_SIZE * 0.2, 0, 0);
+                    leftEye.add(leftPupil);
+                    
+                    const rightPupil = new THREE.Mesh(
+                        new THREE.BoxGeometry(SEGMENT_SIZE * 0.2, SEGMENT_SIZE * 0.2, SEGMENT_SIZE * 0.2),
+                        pupilMaterial
+                    );
+                    rightPupil.position.set(SEGMENT_SIZE * 0.2, 0, 0);
+                    rightEye.add(rightPupil);
+            
+            // Position the head
+            head.position.copy(startPosition);
+            scene.add(head);
+            
+            // Add the head to the snake's segments
+            playerSnake.segments.push({
+                mesh: head,
+                position: startPosition.clone()
+            });
+            
+            // Create the initial body segments
+            for (let i = 1; i < playerSnake.length; i++) {
+                addSegment(playerSnake);
+            }
+            
+            // Name labels have been disabled
+            // addNameLabel(playerSnake);
+            
+            // Update the score display
+            updateScoreDisplay();
+            
+            return playerSnake;
+        }
+        
+        // Add a segment to a snake
+        function addSegment(snake) {
+            if (!snake || snake.segments.length === 0) return;
+            
+            // Get the position of the last segment
+            const lastSegment = snake.segments[snake.segments.length - 1];
+            const lastPosition = lastSegment.position.clone();
+            
+            // Create a new position slightly behind the last segment
+            const direction = snake.direction.clone().negate(); // Opposite direction
+            const offset = direction.multiplyScalar(SEGMENT_SIZE * 2);
+            const newPosition = lastPosition.clone().add(offset);
+            
+            // Create a new segment
+                    const segmentGeometry = new THREE.BoxGeometry(SEGMENT_SIZE * 2, SEGMENT_SIZE * 1.8, SEGMENT_SIZE * 1.8);
+                    const segmentMaterial = new THREE.MeshStandardMaterial({ 
+                color: snake.color,
+                        roughness: 0.7,
+                        metalness: 0.3
+                    });
+                    const segment = new THREE.Mesh(segmentGeometry, segmentMaterial);
+                    
+            // Position the segment
+            segment.position.copy(newPosition);
+                    scene.add(segment);
+                    
+            // Add the segment to the snake
+            snake.segments.push({
+                        mesh: segment,
+                position: newPosition
+            });
+        }
+        
+        // Set up controls for the player's snake
+        function setupControls() {
+            // Track pressed keys
+            const keysPressed = {};
+            
+            // Keyboard controls - keydown
+            document.addEventListener('keydown', function(event) {
+                if (!gameRunning || !playerSnake) return;
+                
+                // Store the key state
+                keysPressed[event.key] = true;
+                
+                // Handle one-time key presses
+                switch(event.key) {
+                    case ' ':
+                        // Temporary boost
+                        if (!playerSnake.boosting) {
+                            playerSnake.boosting = true;
+                            playerSnake.originalSpeed = playerSnake.speed;
+                            playerSnake.speed *= 2;
+                            
+                            // Reset after a short time
+                            setTimeout(() => {
+                                if (playerSnake) {
+                                    playerSnake.speed = playerSnake.originalSpeed;
+                                    playerSnake.boosting = false;
+                                }
+                            }, 1000);
+                        }
+                        break;
+                    case 'p':
+                    case 'P':
+                        // Use speed powerup
+                        useSpeedPowerup();
+                        break;
+                }
+            });
+            
+            // Keyboard controls - keyup
+            document.addEventListener('keyup', function(event) {
+                // Remove the key from pressed keys
+                delete keysPressed[event.key];
+            });
+            
+            // Process continuous key presses in the animation loop
+            function processControls() {
+                if (!gameRunning || !playerSnake) return;
+                
+                // Handle continuous key presses
+                if (keysPressed['ArrowUp'] || keysPressed['w'] || keysPressed['W']) {
+                    // Pitch up
+                    playerSnake.direction.y += TURN_SPEED;
+                    playerSnake.direction.normalize();
+                }
+                
+                if (keysPressed['ArrowDown'] || keysPressed['s'] || keysPressed['S']) {
+                    // Pitch down
+                    playerSnake.direction.y -= TURN_SPEED;
+                    playerSnake.direction.normalize();
+                }
+                
+                if (keysPressed['ArrowLeft'] || keysPressed['a'] || keysPressed['A']) {
+                    // Turn left
+                    playerSnake.rotationY += TURN_SPEED;
+                    playerSnake.direction.x = Math.sin(playerSnake.rotationY);
+                    playerSnake.direction.z = Math.cos(playerSnake.rotationY);
+                    playerSnake.direction.normalize();
+                }
+                
+                if (keysPressed['ArrowRight'] || keysPressed['d'] || keysPressed['D']) {
+                    // Turn right
+                    playerSnake.rotationY -= TURN_SPEED;
+                    playerSnake.direction.x = Math.sin(playerSnake.rotationY);
+                    playerSnake.direction.z = Math.cos(playerSnake.rotationY);
+                    playerSnake.direction.normalize();
+                }
+            }
+            
+            // Return the processControls function to be called in the animation loop
+            return processControls;
+        }
+        
+        // Use a speed powerup
+        function useSpeedPowerup() {
+            if (speedPowerupCount <= 0 || speedPowerupActive || !playerSnake) return;
+            
+            // Decrease the powerup count
+            speedPowerupCount--;
+            
+            // Set the powerup as active
+            speedPowerupActive = true;
+            
+            // Store the original speed
+            const originalSpeed = playerSnake.speed;
+            
+            // Increase the speed
+            playerSnake.speed *= 1.5;
+            
+            // Add visual effect to the snake
+            for (let i = 0; i < playerSnake.segments.length; i++) {
+                const segment = playerSnake.segments[i].mesh;
+                segment.material.emissive = new THREE.Color(0x00ffff);
+                segment.material.emissiveIntensity = 0.5;
+            }
+            
+            // Show notification
+            showNotification("Speed boost activated!", "#00ffff");
+            
+            // Reset after duration
+            speedPowerupTimer = setTimeout(() => {
+                // Reset speed
+                if (playerSnake) {
+                    playerSnake.speed = originalSpeed;
+                    
+                    // Reset visual effects
+                    for (let i = 0; i < playerSnake.segments.length; i++) {
+                        const segment = playerSnake.segments[i].mesh;
+                        segment.material.emissive = new THREE.Color(0x000000);
+                        segment.material.emissiveIntensity = 0;
+                    }
+                }
+                
+                // Reset powerup state
+                speedPowerupActive = false;
+                
+                // Show notification
+                showNotification("Speed boost ended", "#ffffff");
+            }, SPEED_POWERUP_DURATION);
+        }
+        
+        // Spawn food at a random position
+        function spawnFood() {
+            // Random position within the world boundaries
+            const x = (Math.random() - 0.5) * WORLD_SIZE * 0.8;
+            
+            // Determine food elevation with a weighted distribution:
+            // - All food starts above the trees (minimum height of 10 units)
+            // - 70% of food between just above trees and mid-sky (10-25 units)
+            // - 25% of food at medium height (25-40 units)
+            // - 5% of food at high elevation (40-60 units)
+            let y;
+            const elevationRandom = Math.random();
+            
+            if (elevationRandom < 0.70) {
+                // Low to mid elevation (70% chance)
+                y = 10 + Math.random() * 15; // 10-25 units (above trees)
+            } else if (elevationRandom < 0.95) {
+                // Medium elevation (25% chance)
+                y = 25 + Math.random() * 15; // 25-40 units
+            } else {
+                // High elevation (5% chance)
+                y = 40 + Math.random() * 20; // 40-60 units
+            }
+            
+            const z = (Math.random() - 0.5) * WORLD_SIZE * 0.8;
+            
+            const position = new THREE.Vector3(x, y, z);
+            
+            // Create a food group to hold all food-related objects
+            const foodGroup = new THREE.Group();
+            
+            // Create a cube for the food
+            const foodGeometry = new THREE.BoxGeometry(SEGMENT_SIZE, SEGMENT_SIZE, SEGMENT_SIZE);
+            const foodMaterial = new THREE.MeshStandardMaterial({ 
+                color: 0xffff00, // Bright yellow
+                roughness: 0.05,  // Reduced roughness for more shine
+                metalness: 0.9,  // Increased metalness for more reflection
+                emissive: 0xffff00,
+                emissiveIntensity: 0.8  // Increased from 0.6 to 0.8 for more vibrancy
+            });
+            const foodMesh = new THREE.Mesh(foodGeometry, foodMaterial);
+            foodGroup.add(foodMesh);
+            
+            // Add a glowing sphere around the food
+            const glowGeometry = new THREE.SphereGeometry(SEGMENT_SIZE * 3, 16, 16);
+            const glowMaterial = new THREE.MeshBasicMaterial({ 
+                color: 0xffff00,
+                transparent: true,
+                opacity: 0.5  // Increased from 0.3 to 0.5 for more visibility
+            });
+            const glowingSphere = new THREE.Mesh(glowGeometry, glowMaterial);
+            foodGroup.add(glowingSphere);
+            
+            // Add a point light to make the food glow
+            const foodLight = new THREE.PointLight(0xffff00, 2, 20); // Increased intensity and distance
+            foodLight.position.set(0, 0, 0);
+            foodGroup.add(foodLight);
+            
+            // Add a more visible line connecting the food to the ground
+            const lineGeometry = new THREE.BufferGeometry().setFromPoints([
+                new THREE.Vector3(0, 0, 0),
+                new THREE.Vector3(0, -position.y + 1, 0) // Line to just above ground
+            ]);
+            
+            const lineMaterial = new THREE.LineDashedMaterial({
+                color: 0xffff88, // Slightly lighter yellow for the line
+                dashSize: 2,
+                gapSize: 1,
+                opacity: 0.7, // Increased opacity
+                transparent: true,
+                linewidth: 2 // Note: This may not work in all browsers due to WebGL limitations
+            });
+            
+            const line = new THREE.Line(lineGeometry, lineMaterial);
+            line.computeLineDistances(); // Required for dashed lines
+            foodGroup.add(line);
+            
+            // Add a shadow circle on the ground
+            const shadowGeometry = new THREE.CircleGeometry(SEGMENT_SIZE * 2, 32);
+            const shadowMaterial = new THREE.MeshBasicMaterial({
+                color: 0xffff00,
+                transparent: true,
+                opacity: 0.3,
+                side: THREE.DoubleSide
+            });
+            
+            const shadow = new THREE.Mesh(shadowGeometry, shadowMaterial);
+            shadow.rotation.x = -Math.PI / 2; // Rotate to lie flat on the ground
+            shadow.position.y = -position.y;
+            foodGroup.add(shadow);
+            
+            // Position the entire group
+            foodGroup.position.copy(position);
+            scene.add(foodGroup);
+            
+            // Add the food to the food array
+            food.push({
+                mesh: foodMesh,
+                glowingSphere: glowingSphere,
+                light: foodLight, // Add reference to the light for animation
+                group: foodGroup,
+                position: position,
+                initialScale: 1,
+                pulsePhase: Math.random() * Math.PI * 2, // Random phase for animation
+                collisionRadius: SEGMENT_SIZE * 6 // Size of the glowing sphere for collision detection
+            });
+            
+            return foodGroup;
+        }
+        
+        // Spawn a speed powerup at a random position
+        function spawnSpeedPowerup() {
+            // Random position within the world boundaries
+            const x = (Math.random() - 0.5) * WORLD_SIZE * 0.8;
+            
+            // Position powerups above the trees like food
+            // Use a similar elevation distribution as food
+            let y;
+            const elevationRandom = Math.random();
+            
+            if (elevationRandom < 0.70) {
+                // Low to mid elevation (70% chance)
+                y = 10 + Math.random() * 15; // 10-25 units (above trees)
+            } else if (elevationRandom < 0.95) {
+                // Medium elevation (25% chance)
+                y = 25 + Math.random() * 15; // 25-40 units
+            } else {
+                // High elevation (5% chance)
+                y = 40 + Math.random() * 20; // 40-60 units
+            }
+            
+            const z = (Math.random() - 0.5) * WORLD_SIZE * 0.8;
+            
+            const position = new THREE.Vector3(x, y, z);
+            
+            // Create a powerup group to hold all powerup-related objects
+            const powerupGroup = new THREE.Group();
+            
+            // Create a cube for the powerup
+            const powerupGeometry = new THREE.BoxGeometry(SEGMENT_SIZE, SEGMENT_SIZE, SEGMENT_SIZE);
+            const powerupMaterial = new THREE.MeshStandardMaterial({ 
+                color: 0x00ffff, // Cyan
+                roughness: 0.3,
+                metalness: 0.8,
+                emissive: 0x00ffff,
+                emissiveIntensity: 0.5
+            });
+            const powerupMesh = new THREE.Mesh(powerupGeometry, powerupMaterial);
+            powerupGroup.add(powerupMesh);
+            
+            // Add a glowing sphere around the powerup
+            const glowGeometry = new THREE.SphereGeometry(SEGMENT_SIZE * 3, 16, 16);
+            const glowMaterial = new THREE.MeshBasicMaterial({
+                color: 0x00ffff,
+                transparent: true,
+                opacity: 0.2
+            });
+            const glowingSphere = new THREE.Mesh(glowGeometry, glowMaterial);
+            powerupGroup.add(glowingSphere);
+            
+            // Add a line connecting the powerup to the ground for better visibility
+            const lineMaterial = new THREE.LineDashedMaterial({
+                color: 0x00ffff,
+                dashSize: 3,
+                gapSize: 1,
+                transparent: true,
+                opacity: 0.5
+            });
+            
+            const lineGeometry = new THREE.BufferGeometry().setFromPoints([
+                new THREE.Vector3(0, -position.y, 0),
+                new THREE.Vector3(0, 0, 0)
+            ]);
+            
+            const line = new THREE.Line(lineGeometry, lineMaterial);
+            line.computeLineDistances(); // Required for dashed lines
+            powerupGroup.add(line);
+            
+            // Add a shadow circle on the ground
+            const shadowGeometry = new THREE.CircleGeometry(SEGMENT_SIZE * 2, 32);
+            const shadowMaterial = new THREE.MeshBasicMaterial({
+                color: 0x00ffff,
+                transparent: true,
+                opacity: 0.3,
+                side: THREE.DoubleSide
+            });
+            
+            const shadow = new THREE.Mesh(shadowGeometry, shadowMaterial);
+            shadow.rotation.x = -Math.PI / 2; // Rotate to lie flat on the ground
+            shadow.position.y = -position.y;
+            powerupGroup.add(shadow);
+            
+            // Position the entire group
+            powerupGroup.position.copy(position);
+            scene.add(powerupGroup);
+            
+            // Add the powerup to the powerups array
+            const powerupObj = {
+                mesh: powerupMesh,
+                glowingSphere: glowingSphere,
+                group: powerupGroup,
+                position: position,
+                initialScale: 1,
+                pulsePhase: Math.random() * Math.PI * 2, // Random phase for animation
+                collisionRadius: SEGMENT_SIZE * 4 // Size of the glowing sphere for collision detection
+            };
+            
+            speedPowerups.push(powerupObj);
+            
+            return powerupObj;
+        }
+        
+        // Initialize the game
+        init();
+        
+        // Play eating sound
+        function playEatingSound() {
+            try {
+                console.log("Attempting to play eating sound");
+                
+                // Try THREE.js audio first
+                if (eatingSound && eatingSound.isReady) {
+                    console.log("Using THREE.js audio");
+                    
+                    // If the sound is already playing, stop it and play again
+                    if (eatingSound.isPlaying) {
+                        eatingSound.stop();
+                    }
+                    
+                    eatingSound.play();
+                    
+                    console.log("THREE.js eating sound played");
+                    return;
+                }
+                
+                // Try the preloaded HTML5 Audio element
+                console.log("THREE.js audio not ready, trying preloaded HTML5 Audio");
+                
+                if (eatingAudioElement) {
+                    // Reset the audio to the beginning if it's already playing
+                    eatingAudioElement.currentTime = 0;
+                    
+                    // Play the sound
+                    eatingAudioElement.play()
+                        .then(() => {
+                            console.log("Eating sound played using HTML5 Audio");
+                        })
+                        .catch(error => {
+                            console.error("Could not play eating sound:", error);
+                            playFallbackBeep();
+                        });
+                    return;
+                }
+                
+                // If all else fails, create a new audio element
+                console.log("Creating new Audio element for eating sound");
+                const audio = new Audio('eating-sound.wav');
+                audio.play()
+                    .then(() => {
+                        console.log("Eating sound played using new Audio element");
+                    })
+                    .catch(error => {
+                        console.error("Could not play eating sound with new Audio:", error);
+                        playFallbackBeep();
+                    });
+            } catch (error) {
+                console.error("Error playing eating sound:", error);
+                playFallbackBeep();
+            }
+        }
+        
+        // Show a notification message
+        function showNotification(message, color = "#ffffff") {
+            // Create a notification element
+            const notification = document.createElement('div');
+            notification.style.position = 'absolute';
+            notification.style.top = '100px';
+            notification.style.left = '50%';
+            notification.style.transform = 'translateX(-50%)';
+            notification.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+            notification.style.color = color;
+            notification.style.padding = '10px 20px';
+            notification.style.borderRadius = '5px';
+            notification.style.fontFamily = 'Arial, sans-serif';
+            notification.style.fontSize = '16px';
+            notification.style.zIndex = '100';
+            notification.style.textAlign = 'center';
+            notification.style.transition = 'opacity 0.5s';
+            notification.textContent = message;
+            
+            // Add the notification to the game container
+            document.getElementById('gameContainer').appendChild(notification);
+            
+            // Remove the notification after 3 seconds
+            setTimeout(() => {
+                document.getElementById('gameContainer').removeChild(notification);
+            }, 3000);
+        }
+        
+        // Update the camera position to follow the player's snake
+        function updateCameraPosition() {
+            if (!playerSnake || playerSnake.segments.length === 0) return;
+            
+            // Get the head position
+            const head = playerSnake.segments[0];
+            const headPosition = head.position.clone();
+            
+            // Calculate the camera target position
+            // Position the camera behind and slightly above the snake
+            const cameraOffset = playerSnake.direction.clone().negate().multiplyScalar(20);
+            cameraOffset.y += 10; // Position camera above the snake
+            
+            // Set the camera position
+            const targetPosition = headPosition.clone().add(cameraOffset);
+            camera.position.lerp(targetPosition, 0.1); // Smooth camera movement
+            
+            // Look at the head position
+            camera.lookAt(headPosition);
+        }
+        
+        // Move a snake
+        function moveSnake(snake, deltaTime) {
+            if (!snake || snake.segments.length === 0) return;
+            
+            // Move the head
+            const head = snake.segments[0];
+            const newHeadPosition = head.position.clone().add(
+                snake.direction.clone().multiplyScalar(snake.speed * deltaTime)
+            );
+            
+            // Check world boundaries - wrap around instead of bouncing for infinite feel
+            const boundarySize = WORLD_SIZE - SEGMENT_SIZE;
+            let wrapped = false;
+            let wrapDirection = new THREE.Vector3(); // Store the wrap direction and distance
+            
+            if (newHeadPosition.x < -boundarySize) {
+                wrapDirection.x = 2 * boundarySize; // Distance to wrap
+                newHeadPosition.x = boundarySize;
+                wrapped = true;
+            } else if (newHeadPosition.x > boundarySize) {
+                wrapDirection.x = -2 * boundarySize; // Distance to wrap
+                newHeadPosition.x = -boundarySize;
+                wrapped = true;
+            }
+            
+            if (newHeadPosition.y < 0) {
+                newHeadPosition.y = 0;
+                snake.direction.y *= -0.5; // Gentle bounce for floor only
+            } else if (newHeadPosition.y > boundarySize) {
+                wrapDirection.y = -2 * boundarySize; // Distance to wrap
+                newHeadPosition.y = -boundarySize;
+                wrapped = true;
+            }
+            
+            if (newHeadPosition.z < -boundarySize) {
+                wrapDirection.z = 2 * boundarySize; // Distance to wrap
+                newHeadPosition.z = boundarySize;
+                wrapped = true;
+            } else if (newHeadPosition.z > boundarySize) {
+                wrapDirection.z = -2 * boundarySize; // Distance to wrap
+                newHeadPosition.z = -boundarySize;
+                wrapped = true;
+            }
+            
+            // If wrapped, teleport all segments to maintain snake integrity
+            if (wrapped) {
+                for (let i = 0; i < snake.segments.length; i++) {
+                    const segment = snake.segments[i];
+                    segment.position.add(wrapDirection);
+                    segment.mesh.position.copy(segment.position);
+                }
+            }
+            
+            // Store the old head position
+            const oldHeadPosition = head.position.clone();
+            
+            // Update the head position
+            head.position.copy(newHeadPosition);
+            head.mesh.position.copy(newHeadPosition);
+            
+            // Rotate the head to face the direction of movement
+            if (snake.direction.length() > 0) {
+                const headDirection = snake.direction.clone();
+                // Ensure the direction has a non-zero horizontal component
+                if (Math.abs(headDirection.x) < 0.001 && Math.abs(headDirection.z) < 0.001) {
+                    headDirection.x = 0.001;
+                }
+                headDirection.y = 0; // Ignore vertical component for rotation
+                headDirection.normalize();
+                
+                // Create a rotation that points in the direction of movement
+                const targetRotation = new THREE.Quaternion().setFromUnitVectors(
+                    new THREE.Vector3(0, 0, 1), // Forward vector
+                    headDirection
+                );
+                
+                // Apply the rotation with smoothing
+                head.mesh.quaternion.slerp(targetRotation, 0.4);
+            }
+            
+            // Move the body segments
+            for (let i = 1; i < snake.segments.length; i++) {
+                const segment = snake.segments[i];
+                const prevSegment = snake.segments[i - 1];
+                
+                // Store the current position
+                const oldPosition = segment.position.clone();
+                
+                // Calculate direction to previous segment
+                const direction = new THREE.Vector3().subVectors(
+                    prevSegment.position,
+                    segment.position
+                );
+                
+                // Calculate distance to previous segment
+                const distance = direction.length();
+                
+                // Normalize direction
+                direction.normalize();
+                
+                // Calculate new position - maintain a fixed distance from previous segment
+                const targetDistance = SEGMENT_SIZE * 2;
+                const newPosition = prevSegment.position.clone().sub(
+                    direction.multiplyScalar(targetDistance)
+                );
+                
+                // Smooth movement - lerp towards the target position
+                // Increase the lerp factor from 0.5 to 0.7 for more responsive movement
+                segment.position.lerp(newPosition, 0.7);
+                segment.mesh.position.copy(segment.position);
+                
+                // Rotate the segment to face the direction of movement
+                if (i > 1) { // Skip the first body segment as it follows the head
+                    const segmentDirection = new THREE.Vector3().subVectors(
+                        prevSegment.position,
+                        segment.position
+                    );
+                    
+                    // Ensure the direction has a non-zero horizontal component
+                    if (Math.abs(segmentDirection.x) < 0.001 && Math.abs(segmentDirection.z) < 0.001) {
+                        segmentDirection.x = 0.001;
+                    }
+                    
+                    // Ignore vertical component for rotation
+                    segmentDirection.y = 0;
+                    segmentDirection.normalize();
+                    
+                    // Create a rotation that points in the direction of movement
+                    const targetRotation = new THREE.Quaternion().setFromUnitVectors(
+                        new THREE.Vector3(0, 0, 1), // Forward vector
+                        segmentDirection
+                    );
+                    
+                    // Apply the rotation with smoothing - increase from 0.1 to 0.2 for more responsive rotation
+                    segment.mesh.quaternion.slerp(targetRotation, 0.2);
+                }
+            }
+            
+            // Update the name label position
+            if (snake.nameLabel) {
+                snake.nameLabel.position.copy(head.position);
+                snake.nameLabel.position.y += 2.5; // Reduced from 3 to match the new label position
+            }
+            
+            // Broadcast player position to other players
+            if (snake === playerSnake && connections.length > 0) {
+                // Only broadcast every few frames to reduce network traffic
+                if (Date.now() % 5 === 0) {
+                    broadcastUpdate();
+                }
+            }
+        }
+        
+        // Check for collisions between the player's snake and food
+        function checkFoodCollisions() {
+            if (!playerSnake || playerSnake.segments.length === 0) return;
+            
+            const head = playerSnake.segments[0];
+            const headPosition = head.position.clone();
+            
+            // Check collision with food
+            for (let i = 0; i < food.length; i++) {
+                const foodItem = food[i];
+                const distance = headPosition.distanceTo(foodItem.group.position);
+                
+                if (distance < foodItem.collisionRadius) {
+                    // Play eating sound
+                    playEatingSound();
+                    
+                    // Create eating animation
+                    createEatingAnimation(head.mesh, foodItem);
+                    
+                    // Remove the food
+                    scene.remove(foodItem.group);
+                    food.splice(i, 1);
+                    
+                    // Add a new segment to the snake
+                    addSegment(playerSnake);
+                    
+                    // Increase the score
+                    playerSnake.score += 10;
+                    
+                    // Create new food
+                    spawnFood();
+                    
+                    // Chance to spawn a speed powerup
+                    if (Math.random() < POWERUP_SPAWN_CHANCE) {
+                        spawnSpeedPowerup();
+                    }
+                    
+                    // Update the score display
+                    updateScoreDisplay();
+                    
+                    // Show notification for significant events
+                    if (playerSnake.score % 50 === 0) {
+                        showNotification(`Score: ${playerSnake.score}! Keep going!`, "#ffff00");
+                    }
+                    
+                    // Break the loop since we've already handled a collision
+                    break;
+                }
+            }
+        }
+        
+        // Update the game state
+        function updateGame(deltaTime = 1) {
+            // Process continuous key presses
+            if (processControlsFunction) {
+                processControlsFunction();
+            }
+            
+            // Move the player's snake
+            moveSnake(playerSnake, deltaTime);
+            
+            // Update and move the AI snake
+            updateAISnake();
+            moveSnake(aiSnake, deltaTime);
+            
+            // Update other players' snakes
+            for (const id in otherPlayers) {
+                moveSnake(otherPlayers[id], deltaTime);
+            }
+            
+            // Check for collisions with food
+            checkFoodCollisions();
+            
+            // Check for AI collisions with food
+            checkAIFoodCollisions();
+            
+            // Check for collisions with powerups
+            checkPowerupCollisions();
+            
+            // Check for collisions with other snakes
+            checkSnakeCollisions();
+            
+            // Check for AI snake collisions
+            checkAISnakeCollisions();
+            
+            // Update the camera position
+            updateCameraPosition();
+            
+            // Animate food
+            animateFood();
+            
+            // Animate powerups
+            animatePowerups();
+            
+            // Update the score display
+            updateScoreDisplay();
+            
+            // Count total players (including AI)
+            document.getElementById('playerCount').textContent = Object.keys(otherPlayers).length + 2; // +2 for player and AI
+        }
+        
+        // Toggle music on
+        function toggleMusicOn() {
+            if (!ambientMusic) return;
+            
+            // Fade in the music
+            ambientMusic.volume = 0;
+            const fadeIn = setInterval(() => {
+                if (ambientMusic.volume < 0.25) { // Reduced from 0.5 to 0.25 (50% reduction)
+                    ambientMusic.volume += 0.01;
+                } else {
+                    clearInterval(fadeIn);
+                    ambientMusic.volume = 0.25; // Reduced from 0.5 to 0.25 (50% reduction)
+                }
+            }, 100);
+            
+            if (ambientMusic.paused) {
+                ambientMusic.play()
+                    .then(() => console.log("Ambient music started"))
+                    .catch(e => console.error("Failed to play ambient music:", e));
+            }
+            
+            isMusicPlaying = true;
+            document.getElementById('musicToggle').textContent = "🔊";
+        }
+    </script>
+</body>
+</html> 
